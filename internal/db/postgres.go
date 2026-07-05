@@ -36,6 +36,7 @@ func FindBinDir() (string, error) {
 		"/usr/pgsql-*/bin",
 		"/opt/homebrew/opt/postgresql@*/bin",
 		"/usr/local/opt/postgresql@*/bin",
+		"/Applications/Postgres.app/Contents/Versions/*/bin",
 	} {
 		matches, _ := filepath.Glob(pattern)
 		sort.Sort(byVersion(matches))

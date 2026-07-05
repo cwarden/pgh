@@ -8,18 +8,32 @@ import (
 )
 
 // findTool locates an external command on PATH, falling back to the sbin
-// directories that are often absent from non-root PATHs.
+// directories often absent from non-root PATHs and to Homebrew's e2fsprogs
+// on macOS.
 func findTool(name string) (string, error) {
 	if p, err := exec.LookPath(name); err == nil {
 		return p, nil
 	}
-	for _, dir := range []string{"/usr/sbin", "/sbin", "/usr/local/sbin"} {
+	for _, dir := range []string{
+		"/usr/sbin", "/sbin", "/usr/local/sbin",
+		"/opt/homebrew/sbin",
+		"/opt/homebrew/opt/e2fsprogs/sbin", "/opt/homebrew/opt/e2fsprogs/bin",
+		"/usr/local/opt/e2fsprogs/sbin", "/usr/local/opt/e2fsprogs/bin",
+	} {
 		p := filepath.Join(dir, name)
 		if fi, err := os.Stat(p); err == nil && fi.Mode()&0o111 != 0 {
 			return p, nil
 		}
 	}
 	return "", fmt.Errorf("%s not found; please install it", name)
+}
+
+// findMkfs locates the ext4 formatter under either of its names.
+func findMkfs() (string, error) {
+	if p, err := findTool("mke2fs"); err == nil {
+		return p, nil
+	}
+	return findTool("mkfs.ext4")
 }
 
 // ImageExists reports whether the database file exists.
@@ -34,7 +48,7 @@ func (d *DB) CreateImage(size int64) error {
 	if size < MinImageSize {
 		return fmt.Errorf("size %s is below the minimum %s", FormatSize(size), FormatSize(MinImageSize))
 	}
-	mkfs, err := findTool("mkfs.ext4")
+	mkfs, err := findMkfs()
 	if err != nil {
 		return err
 	}
@@ -51,7 +65,7 @@ func (d *DB) CreateImage(size int64) error {
 		os.Remove(d.Image)
 		return err
 	}
-	cmd := exec.Command(mkfs, "-q", "-F", "-m", "0",
+	cmd := exec.Command(mkfs, "-q", "-F", "-t", "ext4", "-m", "0",
 		"-E", fmt.Sprintf("root_owner=%d:%d", os.Getuid(), os.Getgid()),
 		d.Image)
 	if out, err := cmd.CombinedOutput(); err != nil {

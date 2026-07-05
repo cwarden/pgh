@@ -7,11 +7,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"syscall"
 )
 
-// pgh mounts images through the first strategy that works:
+// pgh opens images through the first strategy that works:
 //
 //  1. udisks: a kernel loop device plus an in-kernel ext4 mount, set up via
 //     udisksctl. Polkit typically authorizes this for local desktop sessions
@@ -20,93 +21,164 @@ import (
 //     near-native.
 //  2. fuse2fs: a userspace ext4 driver. Works anywhere FUSE does, but is
 //     single-threaded and roughly 3x slower. MountDir is a real directory.
+//  3. pack (the default off Linux, where ext4 cannot be mounted): unpack the
+//     image to a native directory on open, repack on close. See pack.go.
 //
-// Set PGH_MOUNT=fuse2fs to skip udisks.
+// Set PGH_MOUNT=fuse2fs or PGH_MOUNT=pack to force a strategy.
 
-// Mounted reports whether the image's filesystem is currently mounted at
-// (or via) MountDir. A stale FUSE mount (fuse2fs died) is cleaned up and
-// reported as not mounted.
-func (d *DB) Mounted() (bool, error) {
-	target, err := d.resolveMountDir()
-	if err != nil {
-		return false, err
+type backendKind int
+
+const (
+	backendAuto backendKind = iota // udisks, then fuse2fs
+	backendFuse
+	backendPack
+)
+
+func selectedBackend() backendKind {
+	switch os.Getenv("PGH_MOUNT") {
+	case "pack":
+		return backendPack
+	case "fuse2fs":
+		return backendFuse
 	}
-	if target == "" {
-		return false, nil
+	if runtime.GOOS != "linux" {
+		return backendPack
 	}
-	entry, err := findMount(target)
-	if err != nil {
-		return false, err
-	}
-	return entry != nil, nil
+	return backendAuto
 }
 
-// MountBackend describes how the image is mounted: "kernel" (udisks loop
-// mount), "fuse2fs", or "" when not mounted.
-func (d *DB) MountBackend() string {
-	target, err := d.resolveMountDir()
-	if err != nil || target == "" {
-		return ""
-	}
-	entry, err := findMount(target)
-	if err != nil || entry == nil {
-		return ""
-	}
-	if strings.HasPrefix(entry.fstype, "fuse") {
-		return "fuse2fs"
-	}
-	return "kernel"
-}
+// openState describes how an image is currently open, regardless of which
+// backend opened it.
+type openState int
 
-// resolveMountDir canonicalizes MountDir, following the udisks symlink if
-// present. It returns "" if the path does not exist, and cleans up a stale
-// FUSE mount (ENOTCONN) as a side effect.
-func (d *DB) resolveMountDir() (string, error) {
-	target, err := filepath.EvalSymlinks(d.MountDir())
-	if errors.Is(err, syscall.ENOTCONN) {
+const (
+	stateClosed openState = iota
+	stateKernel
+	stateFuse
+	stateUnpacked
+)
+
+// state inspects MountDir and the mount table. A stale FUSE mount (fuse2fs
+// died) is detached and reported as closed.
+func (d *DB) state() (openState, error) {
+	fi, err := os.Lstat(d.MountDir())
+	if os.IsNotExist(err) {
+		return stateClosed, nil
+	}
+	if err != nil {
+		return stateClosed, err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		// udisks: symlink to the mountpoint udisks chose. Dangling means
+		// the mount is gone.
+		target, err := filepath.EvalSymlinks(d.MountDir())
+		if err != nil {
+			return stateClosed, nil
+		}
+		entry, err := findMount(target)
+		if err != nil {
+			return stateClosed, err
+		}
+		if entry != nil {
+			return stateKernel, nil
+		}
+		return stateClosed, nil
+	}
+	if _, err := os.Stat(d.MountDir()); errors.Is(err, syscall.ENOTCONN) {
 		// fuse2fs is gone but the mount table entry remains; detach it.
 		if err := d.unmountFuse(); err != nil {
-			return "", fmt.Errorf("stale mount at %s: %v", d.MountDir(), err)
+			return stateClosed, fmt.Errorf("stale mount at %s: %v", d.MountDir(), err)
 		}
-		return "", nil
+		return stateClosed, nil
 	}
-	if os.IsNotExist(err) {
-		return "", nil
-	}
+	target, err := filepath.EvalSymlinks(d.MountDir())
 	if err != nil {
-		return "", err
+		return stateClosed, err
 	}
-	return target, nil
+	entry, err := findMount(target)
+	if err != nil {
+		return stateClosed, err
+	}
+	if entry != nil {
+		if strings.HasPrefix(entry.fstype, "fuse") {
+			return stateFuse, nil
+		}
+		return stateKernel, nil
+	}
+	// A real, unmounted directory: an unpacked database if it has content,
+	// otherwise a leftover mountpoint.
+	if _, err := os.Stat(d.DataDir()); err == nil {
+		return stateUnpacked, nil
+	}
+	return stateClosed, nil
 }
 
-// Mount mounts the image, preferring a kernel loop mount via udisks and
-// falling back to fuse2fs.
+// Mounted reports whether the image is currently open (mounted or unpacked).
+func (d *DB) Mounted() (bool, error) {
+	st, err := d.state()
+	return st != stateClosed, err
+}
+
+// MountBackend describes how the image is open: "kernel mount", "fuse2fs
+// mount", "unpacked directory", or "" when closed.
+func (d *DB) MountBackend() string {
+	st, err := d.state()
+	if err != nil {
+		return ""
+	}
+	switch st {
+	case stateKernel:
+		return "kernel mount"
+	case stateFuse:
+		return "fuse2fs mount"
+	case stateUnpacked:
+		return "unpacked directory"
+	}
+	return ""
+}
+
+// Mount opens the image with the selected backend.
 func (d *DB) Mount() error {
 	if err := d.ensureStateDir(); err != nil {
 		return err
 	}
-	var udisksErr error
-	if os.Getenv("PGH_MOUNT") != "fuse2fs" {
-		udisksErr = d.mountUdisks()
-		if udisksErr == nil {
-			return nil
-		}
+	switch selectedBackend() {
+	case backendPack:
+		return d.openPacked()
+	case backendFuse:
+		return d.mountFuse2fs()
+	}
+	udisksErr := d.mountUdisks()
+	if udisksErr == nil {
+		return nil
 	}
 	if err := d.mountFuse2fs(); err != nil {
-		if udisksErr != nil {
-			return fmt.Errorf("udisks: %v; fuse2fs: %v", udisksErr, err)
-		}
-		return err
+		return fmt.Errorf("udisks: %v; fuse2fs: %v", udisksErr, err)
 	}
 	return nil
 }
 
-// Unmount detaches the filesystem. It is a no-op if nothing is mounted.
+// Unmount closes the image: unmounts a mounted filesystem, or repacks and
+// removes an unpacked directory. It is a no-op if nothing is open.
 func (d *DB) Unmount() error {
-	if fi, err := os.Lstat(d.MountDir()); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		return d.unmountUdisks()
+	st, err := d.state()
+	if err != nil {
+		return err
 	}
-	return d.unmountFuse()
+	switch st {
+	case stateKernel:
+		return d.unmountUdisks()
+	case stateFuse:
+		if err := d.unmountFuse(); err != nil {
+			return err
+		}
+		os.Remove(d.MountDir())
+		return nil
+	case stateUnpacked:
+		return d.closePacked()
+	}
+	os.Remove(d.MountDir())
+	return nil
 }
 
 // --- udisks backend ---
@@ -169,7 +241,7 @@ func (d *DB) unmountUdisks() error {
 	if dev == "" {
 		// losetup matches by backing-file path, which can miss when the
 		// image has been deleted; fall back to the mount table.
-		if target, _ := d.resolveMountDir(); target != "" {
+		if target, err := filepath.EvalSymlinks(d.MountDir()); err == nil {
 			if entry, _ := findMount(target); entry != nil {
 				dev = entry.dev
 			}
@@ -228,11 +300,9 @@ func (d *DB) mountFuse2fs() error {
 	if out, err := runCmd(fuse2fs, d.Image, d.MountDir()); err != nil {
 		return fmt.Errorf("fuse2fs failed: %v: %s", err, out)
 	}
-	mounted, err := d.Mounted()
-	if err != nil {
+	if st, err := d.state(); err != nil {
 		return err
-	}
-	if !mounted {
+	} else if st != stateFuse {
 		return fmt.Errorf("fuse2fs reported success but %s is not mounted", d.MountDir())
 	}
 	return nil
@@ -266,6 +336,10 @@ type mountEntry struct {
 func readMounts() ([]mountEntry, error) {
 	data, err := os.ReadFile("/proc/self/mounts")
 	if err != nil {
+		// No /proc outside Linux; nothing is ever mounted there.
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	var entries []mountEntry

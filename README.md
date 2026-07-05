@@ -23,20 +23,30 @@ the server is stopped and the file unmounted.
 
 ## Requirements
 
-- Linux
+On Linux:
+
 - `udisks2` (fast kernel loop mounts, local sessions) and/or
   `fuse2fs` + `fusermount3` (fallback that works anywhere FUSE does)
-- `mkfs.ext4` (e2fsprogs)
+- e2fsprogs (`mke2fs`)
 - PostgreSQL server binaries (`initdb`, `pg_ctl`, `postgres`) and `psql`
-
-On Debian/Ubuntu:
 
 ```console
 $ sudo apt install fuse2fs e2fsprogs postgresql postgresql-client
 ```
 
+On macOS (where ext4 can't be mounted, pgh unpacks and repacks the image
+instead — see below):
+
+- e2fsprogs (`mke2fs`, `debugfs`)
+- PostgreSQL
+
+```console
+$ brew install e2fsprogs postgresql
+```
+
 No root is required at runtime: the image is formatted with
-`root_owner=$(id -u)` and mounted with fuse2fs, and PostgreSQL runs as you.
+`root_owner=$(id -u)`, mounted (or unpacked) as you, and PostgreSQL runs
+as you.
 
 ## Install
 
@@ -111,7 +121,7 @@ $ pgh stop temp.pdb && rm temp.pdb
 1. A sparse file is created and formatted as ext4 with
    `mkfs.ext4 -E root_owner=$(id -u):$(id -g)`, so the filesystem is owned by
    you rather than root.
-2. The image is mounted, trying the fastest available strategy:
+2. The image is opened, trying the fastest available strategy:
    1. **kernel loop mount via udisks** (`udisksctl loop-setup` + `mount`) —
       the real in-kernel ext4 driver, near-native performance. Polkit
       typically authorizes this for local desktop sessions without root.
@@ -120,9 +130,18 @@ $ pgh stop temp.pdb && rm temp.pdb
    2. **fuse2fs** — works anywhere FUSE does (including over ssh, where
       polkit usually denies udisks), but the userspace ext4 driver is
       roughly 3x slower on queries and 5x on bulk loads.
+   3. **pack/unpack** — the default on non-Linux platforms, where ext4
+      can't be mounted at all: the image's contents are extracted to a
+      native directory with `debugfs rdump`, PostgreSQL runs at full native
+      speed, and on close the directory is packed back into a fresh ext4
+      image with `mke2fs -d` and atomically renamed over the file. The
+      trade-offs: the database file is stale while open, and open/close
+      take time proportional to the database size.
 
-   Set `PGH_MOUNT=fuse2fs` to skip udisks. `pgh status` shows which backend
-   a mounted database is using.
+   Set `PGH_MOUNT=fuse2fs` or `PGH_MOUNT=pack` to force a strategy.
+   `pgh status` shows which one an open database is using. Images are
+   identical across strategies — a file created on macOS opens with a
+   kernel mount on Linux and vice versa.
 3. `initdb` creates a data directory inside the image on first use
    (`trust` auth, superuser = your username — the socket directory is
    only accessible to you).
@@ -145,7 +164,15 @@ serialize on a lock.
 
 ## Caveats
 
-- The database file must not be moved or modified while mounted.
+- The database file must not be moved or modified while mounted. In
+  pack/unpack mode the file's contents are additionally *stale* while the
+  database is open: copying it then misses everything since it was opened.
+- Moving a database file between operating systems works only informally:
+  PostgreSQL major versions must match, and PostgreSQL does not officially
+  support cross-platform data directories. pgh improves the odds by
+  initializing clusters with the C locale (collation order — the classic
+  cross-OS index corruptor — is identical everywhere), but treat cross-OS
+  files as a convenience, not a guarantee.
 - This is a convenience tool for local development and scratch databases,
   not a production setup. As a rough guide (pgbench, scale 10, 4 clients):
   ~12,600 tps on a kernel mount vs ~8,600 tps on fuse2fs vs ~24,300 tps on

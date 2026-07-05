@@ -70,10 +70,10 @@ func printStatus(d *db.DB) error {
 		return err
 	}
 	if info == nil {
-		fmt.Printf("%s: mounted at %s (%s), server stopped\n", d.Image, d.MountDir(), d.MountBackend())
+		fmt.Printf("%s: open at %s (%s), server stopped\n", d.Image, d.MountDir(), d.MountBackend())
 		return nil
 	}
-	fmt.Printf("%s: running (pid %d, %s mount)\n  %s\n", d.Image, info.PID, d.MountBackend(), info.URL())
+	fmt.Printf("%s: running (pid %d, %s)\n  %s\n", d.Image, info.PID, d.MountBackend(), info.URL())
 	return nil
 }
 

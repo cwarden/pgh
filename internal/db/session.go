@@ -29,11 +29,13 @@ func (d *DB) Up(opts UpOptions) (info *ConnInfo, started bool, err error) {
 	}
 	defer unlock()
 
-	if !d.ImageExists() {
-		size := opts.Size
-		if size == 0 {
-			size = DefaultImageSize
-		}
+	size := opts.Size
+	if size == 0 {
+		size = DefaultImageSize
+	}
+	// The pack backend has no empty image to format up front: the file is
+	// first created by packing the freshly initdb'ed directory below.
+	if !d.ImageExists() && selectedBackend() != backendPack {
 		if err := d.CreateImage(size); err != nil {
 			return nil, false, err
 		}
@@ -49,6 +51,14 @@ func (d *DB) Up(opts UpOptions) (info *ConnInfo, started bool, err error) {
 	}
 	if !d.Initialized() {
 		if err := d.InitDB(); err != nil {
+			d.cleanupAfterFailure(mounted)
+			return nil, false, err
+		}
+	}
+	if !d.ImageExists() {
+		// Pack a brand-new database immediately so the file exists as soon
+		// as the database does.
+		if err := d.packImage(size); err != nil {
 			d.cleanupAfterFailure(mounted)
 			return nil, false, err
 		}
@@ -74,12 +84,19 @@ func (d *DB) Up(opts UpOptions) (info *ConnInfo, started bool, err error) {
 	return info, started, nil
 }
 
-// cleanupAfterFailure unmounts the image if this call mounted it, so a
-// failed Up doesn't leave a stray fuse2fs process behind.
-func (d *DB) cleanupAfterFailure(wasMounted bool) {
-	if !wasMounted {
-		d.Unmount()
+// cleanupAfterFailure closes what this call opened, so a failed Up doesn't
+// leave a stray fuse2fs process or half-initialized unpacked directory
+// behind. An unpacked directory is discarded rather than packed: the image
+// (if any) still holds the last good state.
+func (d *DB) cleanupAfterFailure(wasOpen bool) {
+	if wasOpen {
+		return
 	}
+	if st, _ := d.state(); st == stateUnpacked {
+		os.RemoveAll(d.MountDir())
+		return
+	}
+	d.Unmount()
 }
 
 // Down stops the server if it is running and unmounts the image if it is
@@ -115,13 +132,11 @@ func (d *DB) Down() error {
 // Cleanup removes all runtime state for an image that no longer exists:
 // it stops the server and unmounts if anything is still up (a mounted
 // filesystem keeps a deleted image's inode alive), then deletes the state
-// dir. It is a no-op if the image still exists.
+// dir. An unpacked directory is discarded, not repacked — the user deleted
+// the file. It is a no-op if the image still exists.
 func (d *DB) Cleanup() error {
 	if d.ImageExists() {
 		return nil
-	}
-	if err := d.Down(); err != nil {
-		return err
 	}
 	unlock, err := d.lock()
 	if err != nil {
@@ -131,6 +146,27 @@ func (d *DB) Cleanup() error {
 	if d.ImageExists() {
 		// The image reappeared (e.g. a concurrent pgh is creating it).
 		return nil
+	}
+	if info, err := d.Running(); err != nil {
+		return err
+	} else if info != nil {
+		if err := d.Stop(); err != nil {
+			return err
+		}
+	}
+	st, err := d.state()
+	if err != nil {
+		return err
+	}
+	switch st {
+	case stateKernel:
+		if err := d.unmountUdisks(); err != nil {
+			return err
+		}
+	case stateFuse:
+		if err := d.unmountFuse(); err != nil {
+			return err
+		}
 	}
 	return os.RemoveAll(d.StateDir)
 }

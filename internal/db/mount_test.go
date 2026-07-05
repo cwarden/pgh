@@ -83,8 +83,8 @@ func TestMountFuse2fsForced(t *testing.T) {
 		t.Fatalf("Mount: %v", err)
 	}
 	t.Cleanup(func() { d.Unmount() })
-	if backend := d.MountBackend(); backend != "fuse2fs" {
-		t.Errorf("MountBackend() = %q, want fuse2fs", backend)
+	if backend := d.MountBackend(); backend != "fuse2fs mount" {
+		t.Errorf("MountBackend() = %q, want fuse2fs mount", backend)
 	}
 	if err := d.Unmount(); err != nil {
 		t.Fatalf("Unmount: %v", err)

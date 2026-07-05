@@ -84,12 +84,11 @@ func (d *DB) LogFile() string { return filepath.Join(d.MountDir(), "postgres.log
 // sourceFile records which image a state dir belongs to, for `pgh status`.
 func (d *DB) sourceFile() string { return filepath.Join(d.StateDir, "source") }
 
-// ensureStateDir creates the state dir, socket dir, and source marker.
+// ensureStateDir creates the state dir, socket dir, and source marker. The
+// mnt path is left to the backends: a directory for fuse2fs and pack, a
+// symlink for udisks.
 func (d *DB) ensureStateDir() error {
 	if err := os.MkdirAll(d.SockDir(), 0o700); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(d.MountDir(), 0o700); err != nil {
 		return err
 	}
 	return os.WriteFile(d.sourceFile(), []byte(d.Image+"\n"), 0o600)
