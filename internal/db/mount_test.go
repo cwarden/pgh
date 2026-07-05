@@ -40,6 +40,26 @@ func TestMatchOne(t *testing.T) {
 	}
 }
 
+func TestParseFsSize(t *testing.T) {
+	out := `dumpe2fs 1.46.5 (30-Dec-2021)
+Filesystem volume name:   <none>
+Block count:              65536
+Reserved block count:     0
+Block size:               4096
+Fragment size:            4096
+`
+	size, err := parseFsSize(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != 65536*4096 {
+		t.Errorf("parseFsSize = %d, want %d", size, 65536*4096)
+	}
+	if _, err := parseFsSize("no numbers here"); err == nil {
+		t.Error("parseFsSize should fail on unrecognized output")
+	}
+}
+
 func TestFindMountRoot(t *testing.T) {
 	entry, err := findMount("/")
 	if err != nil {

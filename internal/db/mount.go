@@ -188,15 +188,26 @@ func (d *DB) mountUdisks() error {
 	if err != nil {
 		return err
 	}
-	// Reuse an existing loop device for this image rather than creating a
-	// second one: two writable loop devices over the same file would let the
-	// filesystem be mounted twice and corrupted.
+	// Reuse an existing mounted loop device for this image rather than
+	// creating a second one: two writable loop devices over the same file
+	// would let the filesystem be mounted twice and corrupted. An unmounted
+	// leftover is deleted instead, so the fresh device picks up the growth
+	// ceiling set below.
 	dev, err := loopDeviceFor(d.Image)
 	if err != nil {
 		return err
 	}
+	if dev != "" {
+		if target, _ := mountpointOf(dev); target == "" {
+			runCmd(udisksctl, "loop-delete", "-b", dev, "--no-user-interaction")
+			dev = ""
+		}
+	}
 	createdLoop := false
 	if dev == "" {
+		// Give the loop device room for online growth: its capacity is
+		// fixed at setup and the file is sparse, so the extra costs nothing.
+		d.setGrowthCeiling()
 		out, err := runCmd(udisksctl, "loop-setup", "-f", d.Image, "--no-user-interaction")
 		if err != nil {
 			return err
@@ -262,6 +273,11 @@ func (d *DB) unmountUdisks() error {
 		runCmd(udisksctl, "loop-delete", "-b", dev, "--no-user-interaction")
 	}
 	os.Remove(d.MountDir())
+	// Shed the online-growth headroom so the file's size reflects the
+	// filesystem again.
+	if d.ImageExists() {
+		d.dropGrowthCeiling()
+	}
 	return nil
 }
 

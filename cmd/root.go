@@ -56,7 +56,7 @@ func init() {
 	rootCmd.Flags().SetInterspersed(false)
 	for _, cmd := range []*cobra.Command{rootCmd, startCmd} {
 		cmd.Flags().StringVarP(&flagSize, "size", "s", db.FormatSize(db.DefaultImageSize),
-			"size of a newly created database file (sparse), e.g. 512M, 2G")
+			"size of the database file, e.g. 512M, 2G; resizes an existing stopped database")
 		cmd.Flags().IntVarP(&flagPort, "port", "p", 0,
 			"also listen on 127.0.0.1:PORT (default: Unix socket only)")
 		cmd.Flags().BoolVar(&flagDurable, "durable", false,
@@ -83,6 +83,26 @@ func upOptions() (db.UpOptions, error) {
 	return db.UpOptions{Size: size, Port: flagPort, Durable: flagDurable}, nil
 }
 
+// resizeIfRequested resizes an existing image when --size was given
+// explicitly. For new images the size is applied at creation instead.
+func resizeIfRequested(cmd *cobra.Command, d *db.DB) error {
+	if !cmd.Flags().Changed("size") || !d.ImageExists() {
+		return nil
+	}
+	size, err := db.ParseSize(flagSize)
+	if err != nil {
+		return err
+	}
+	resized, err := d.Resize(size)
+	if err != nil {
+		return err
+	}
+	if resized {
+		fmt.Fprintf(os.Stderr, "resized %s to %s\n", d.Image, db.FormatSize(size))
+	}
+	return nil
+}
+
 func runShell(cmd *cobra.Command, args []string) error {
 	d, err := openDB(args[0])
 	if err != nil {
@@ -90,6 +110,9 @@ func runShell(cmd *cobra.Command, args []string) error {
 	}
 	opts, err := upOptions()
 	if err != nil {
+		return err
+	}
+	if err := resizeIfRequested(cmd, d); err != nil {
 		return err
 	}
 	info, started, err := d.Up(opts)
@@ -103,6 +126,7 @@ func runShell(cmd *cobra.Command, args []string) error {
 			}
 		}()
 	}
+	ensureWatcher(d)
 	exitCode = runPsql(d, info, args[1:])
 	return nil
 }

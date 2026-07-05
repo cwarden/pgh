@@ -108,6 +108,9 @@ func (d *DB) Down() error {
 	}
 	defer unlock()
 
+	// Stop the watcher first so it cannot grow the filesystem mid-unmount.
+	d.StopWatcher()
+
 	info, err := d.Running()
 	if err != nil {
 		return err
@@ -147,6 +150,7 @@ func (d *DB) Cleanup() error {
 		// The image reappeared (e.g. a concurrent pgh is creating it).
 		return nil
 	}
+	d.StopWatcher()
 	if info, err := d.Running(); err != nil {
 		return err
 	} else if info != nil {

@@ -99,6 +99,37 @@ temp.pdb: running (pid 797492, kernel mount)
 Runtime state for database files that have since been deleted is cleaned up
 (and not reported) as part of `pgh status`.
 
+### Resizing
+
+Kernel-mounted databases (the usual case on Linux) **grow automatically**: a
+watcher process spawned alongside the server polls free space and grows the
+filesystem online — no restart, no disconnects — whenever it drops below 25%
+(or 64MB). Growth is bounded by a ceiling of the current size plus
+`PGH_GROW_HEADROOM` (default 64G; set to `off` to disable autogrow). While
+the database is open, the file's apparent size includes that sparse ceiling;
+on stop it shrinks back to the filesystem's actual size. The watcher logs to
+`watch.log` in the state dir.
+
+Autogrow is poll-based (every 250ms), so an extremely fast bulk load can
+still outrun it — PostgreSQL then reports a transaction error (or PANICs
+and recovers, if the WAL loses the race). For a known-huge import, pre-size
+the database instead.
+
+Passing `--size` explicitly for an existing, stopped database resizes it
+(grow or shrink) with resize2fs before connecting:
+
+```console
+$ pgh -s 4G temp.pdb                # grow, then open a shell
+$ pgh start -s 512M temp.pdb        # shrink, then start
+```
+
+Shrinking below the space in use fails safely. A running database must be
+stopped before it can be resized offline.
+
+On fuse2fs mounts there is no online growth (grow with `--size` while
+stopped); in pack/unpack mode limits don't apply while open, and the file is
+sized to its contents on close.
+
 ### Deleting a database
 
 Stop it, then delete the file:
@@ -111,7 +142,7 @@ $ pgh stop temp.pdb && rm temp.pdb
 
 | Flag | Commands | Description |
 |------|----------|-------------|
-| `-s, --size` | shell, `start` | Size of a newly created database file (default `1G`). The file is sparse, so unused space costs nothing. |
+| `-s, --size` | shell, `start` | Size of the database file (default `1G` for new files; the file is sparse, so unused space costs nothing). Given explicitly for an existing stopped database, resizes it. |
 | `-p, --port` | shell, `start` | Also listen on `127.0.0.1:PORT` (default: Unix socket only). |
 | `--durable` | shell, `start` | Make commits wait for the WAL to reach disk (PostgreSQL's default behavior). |
 | `--bindir` | all | PostgreSQL binary directory (default: autodetect via `pg_config`, `PATH`, then `/usr/lib/postgresql/*/bin` and friends). `PGH_BINDIR` works too. |

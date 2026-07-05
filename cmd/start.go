@@ -29,6 +29,9 @@ Use "pgh stop DBFILE" to shut it down and unmount.`,
 		if err != nil {
 			return err
 		}
+		if err := resizeIfRequested(cmd, d); err != nil {
+			return err
+		}
 		info, started, err := d.Up(opts)
 		if err != nil {
 			return err
@@ -38,6 +41,7 @@ Use "pgh stop DBFILE" to shut it down and unmount.`,
 		} else {
 			fmt.Fprintf(os.Stderr, "already running: %s\n", d.Image)
 		}
+		ensureWatcher(d)
 		fmt.Println(info.URL())
 		return nil
 	},
