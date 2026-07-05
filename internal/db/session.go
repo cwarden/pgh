@@ -13,6 +13,9 @@ type UpOptions struct {
 	Size int64
 	// Port enables TCP on 127.0.0.1:Port in addition to the Unix socket.
 	Port int
+	// Durable makes commits wait for the WAL to reach disk (PostgreSQL's
+	// default). Off by default: see Start.
+	Durable bool
 }
 
 // Up ensures the database is running: it creates the image if missing,
@@ -55,7 +58,7 @@ func (d *DB) Up(opts UpOptions) (info *ConnInfo, started bool, err error) {
 		return nil, false, err
 	}
 	if info == nil {
-		if err := d.Start(opts.Port); err != nil {
+		if err := d.Start(opts.Port, opts.Durable); err != nil {
 			d.cleanupAfterFailure(mounted)
 			return nil, false, err
 		}
@@ -107,6 +110,29 @@ func (d *DB) Down() error {
 		}
 	}
 	return nil
+}
+
+// Cleanup removes all runtime state for an image that no longer exists:
+// it stops the server and unmounts if anything is still up (a mounted
+// filesystem keeps a deleted image's inode alive), then deletes the state
+// dir. It is a no-op if the image still exists.
+func (d *DB) Cleanup() error {
+	if d.ImageExists() {
+		return nil
+	}
+	if err := d.Down(); err != nil {
+		return err
+	}
+	unlock, err := d.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if d.ImageExists() {
+		// The image reappeared (e.g. a concurrent pgh is creating it).
+		return nil
+	}
+	return os.RemoveAll(d.StateDir)
 }
 
 // lock takes an exclusive flock on the state dir so concurrent pgh

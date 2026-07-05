@@ -3,7 +3,8 @@
 Single-file PostgreSQL databases, sqlite3-style.
 
 `pgh` stores an entire PostgreSQL database in one ordinary file. The file is
-an ext4 filesystem image, mounted without root via [fuse2fs], containing a
+an ext4 filesystem image, mounted without root — via a udisks kernel loop
+mount where available, or [fuse2fs] anywhere FUSE works — containing a
 PostgreSQL data directory. Copy the file, and you've copied the database.
 
 ```console
@@ -22,7 +23,9 @@ the server is stopped and the file unmounted.
 
 ## Requirements
 
-- Linux with FUSE (`fuse2fs`, `fusermount3`)
+- Linux
+- `udisks2` (fast kernel loop mounts, local sessions) and/or
+  `fuse2fs` + `fusermount3` (fallback that works anywhere FUSE does)
 - `mkfs.ext4` (e2fsprogs)
 - PostgreSQL server binaries (`initdb`, `pg_ctl`, `postgres`) and `psql`
 
@@ -79,9 +82,12 @@ $ psql -h 127.0.0.1 -p 5433 -U $USER postgres
 ```console
 $ pgh status                       # all databases pgh knows about
 $ pgh status temp.pdb              # one database
-temp.pdb: running (pid 797492)
+temp.pdb: running (pid 797492, kernel mount)
   postgresql://cwarden@/postgres?host=%2Frun%2Fuser%2F1000%2Fpgh%2Ftemp-00e34412%2Fsock&port=5432
 ```
+
+Runtime state for database files that have since been deleted is cleaned up
+(and not reported) as part of `pgh status`.
 
 ### Deleting a database
 
@@ -97,6 +103,7 @@ $ pgh stop temp.pdb && rm temp.pdb
 |------|----------|-------------|
 | `-s, --size` | shell, `start` | Size of a newly created database file (default `1G`). The file is sparse, so unused space costs nothing. |
 | `-p, --port` | shell, `start` | Also listen on `127.0.0.1:PORT` (default: Unix socket only). |
+| `--durable` | shell, `start` | Make commits wait for the WAL to reach disk (PostgreSQL's default behavior). |
 | `--bindir` | all | PostgreSQL binary directory (default: autodetect via `pg_config`, `PATH`, then `/usr/lib/postgresql/*/bin` and friends). `PGH_BINDIR` works too. |
 
 ## How it works
@@ -104,14 +111,31 @@ $ pgh stop temp.pdb && rm temp.pdb
 1. A sparse file is created and formatted as ext4 with
    `mkfs.ext4 -E root_owner=$(id -u):$(id -g)`, so the filesystem is owned by
    you rather than root.
-2. The image is mounted with `fuse2fs` at
-   `$XDG_RUNTIME_DIR/pgh/<name>-<hash>/mnt` (no root needed).
+2. The image is mounted, trying the fastest available strategy:
+   1. **kernel loop mount via udisks** (`udisksctl loop-setup` + `mount`) —
+      the real in-kernel ext4 driver, near-native performance. Polkit
+      typically authorizes this for local desktop sessions without root.
+      udisks picks the mountpoint (under `/media`), so
+      `$XDG_RUNTIME_DIR/pgh/<name>-<hash>/mnt` becomes a symlink to it.
+   2. **fuse2fs** — works anywhere FUSE does (including over ssh, where
+      polkit usually denies udisks), but the userspace ext4 driver is
+      roughly 3x slower on queries and 5x on bulk loads.
+
+   Set `PGH_MOUNT=fuse2fs` to skip udisks. `pgh status` shows which backend
+   a mounted database is using.
 3. `initdb` creates a data directory inside the image on first use
    (`trust` auth, superuser = your username — the socket directory is
    only accessible to you).
 4. `pg_ctl` starts PostgreSQL with its Unix socket in the runtime directory
    (kept outside the image for socket-path-length reasons). The server log
    lives inside the image at `postgres.log`.
+
+   By default the server runs with `synchronous_commit = off`, so commits
+   don't wait for the WAL to be flushed to disk. fsync round-trips are the
+   dominant cost of the FUSE mount, and skipping them gives roughly 9x the
+   commit throughput. The trade-off is that a crash can lose the last few
+   hundred milliseconds of commits — it can never corrupt the database
+   (unlike `fsync = off`). Pass `--durable` for full durability.
 5. `psql` connects to the `postgres` database.
 
 The runtime state (mountpoint, socket, lock) lives under
@@ -122,8 +146,10 @@ serialize on a lock.
 ## Caveats
 
 - The database file must not be moved or modified while mounted.
-- fuse2fs is slower than a kernel mount; this is a convenience tool for
-  local development and scratch databases, not a production setup.
+- This is a convenience tool for local development and scratch databases,
+  not a production setup. As a rough guide (pgbench, scale 10, 4 clients):
+  ~12,600 tps on a kernel mount vs ~8,600 tps on fuse2fs vs ~24,300 tps on
+  a plain data directory with the same settings.
 - If a `pgh` shell that started the server exits while other clients are
   connected, they are disconnected (fast shutdown). Use `pgh start` first
   if multiple processes need the database.

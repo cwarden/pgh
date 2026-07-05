@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/cwarden/pgh/internal/db"
 	"github.com/spf13/cobra"
@@ -23,11 +24,21 @@ var statusCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if len(dbs) == 0 {
+		var kept []*db.DB
+		for _, d := range dbs {
+			if d.ImageExists() {
+				kept = append(kept, d)
+				continue
+			}
+			if err := d.Cleanup(); err != nil {
+				fmt.Fprintf(os.Stderr, "pgh: cleaning up state for deleted %s: %v\n", d.Image, err)
+			}
+		}
+		if len(kept) == 0 {
 			fmt.Println("no databases")
 			return nil
 		}
-		for _, d := range dbs {
+		for _, d := range kept {
 			if err := printStatus(d); err != nil {
 				fmt.Printf("%s: %v\n", d.Image, err)
 			}
@@ -39,6 +50,10 @@ var statusCmd = &cobra.Command{
 
 func printStatus(d *db.DB) error {
 	if !d.ImageExists() {
+		// Asked about explicitly, so report it — but still drop stale state.
+		if err := d.Cleanup(); err != nil {
+			return err
+		}
 		fmt.Printf("%s: no such file\n", d.Image)
 		return nil
 	}
@@ -55,10 +70,10 @@ func printStatus(d *db.DB) error {
 		return err
 	}
 	if info == nil {
-		fmt.Printf("%s: mounted at %s, server stopped\n", d.Image, d.MountDir())
+		fmt.Printf("%s: mounted at %s (%s), server stopped\n", d.Image, d.MountDir(), d.MountBackend())
 		return nil
 	}
-	fmt.Printf("%s: running (pid %d)\n  %s\n", d.Image, info.PID, info.URL())
+	fmt.Printf("%s: running (pid %d, %s mount)\n  %s\n", d.Image, info.PID, d.MountBackend(), info.URL())
 	return nil
 }
 

@@ -43,6 +43,46 @@ func TestNewUsesStateBase(t *testing.T) {
 	}
 }
 
+func TestCleanupRemovesStateForDeletedImage(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("PGH_STATE_DIR", filepath.Join(base, "state"))
+	d, err := New(filepath.Join(base, "gone.pdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.ensureStateDir(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Cleanup(); err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if _, err := os.Stat(d.StateDir); !os.IsNotExist(err) {
+		t.Errorf("state dir %s still exists after Cleanup", d.StateDir)
+	}
+}
+
+func TestCleanupKeepsStateForExistingImage(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("PGH_STATE_DIR", filepath.Join(base, "state"))
+	image := filepath.Join(base, "here.pdb")
+	if err := os.WriteFile(image, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, err := New(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.ensureStateDir(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Cleanup(); err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if _, err := os.Stat(d.StateDir); err != nil {
+		t.Errorf("state dir %s should survive Cleanup while image exists: %v", d.StateDir, err)
+	}
+}
+
 func TestParsePostmasterPid(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "postmaster.pid")

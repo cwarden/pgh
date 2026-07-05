@@ -13,9 +13,10 @@ import (
 )
 
 var (
-	flagSize   string
-	flagPort   int
-	flagBinDir string
+	flagSize    string
+	flagPort    int
+	flagBinDir  string
+	flagDurable bool
 )
 
 var rootCmd = &cobra.Command{
@@ -58,6 +59,8 @@ func init() {
 			"size of a newly created database file (sparse), e.g. 512M, 2G")
 		cmd.Flags().IntVarP(&flagPort, "port", "p", 0,
 			"also listen on 127.0.0.1:PORT (default: Unix socket only)")
+		cmd.Flags().BoolVar(&flagDurable, "durable", false,
+			"make commits wait for the WAL to reach disk (slower on FUSE; default trades a sub-second data-loss window on crash for ~9x commit throughput)")
 	}
 	rootCmd.PersistentFlags().StringVar(&flagBinDir, "bindir", "",
 		"PostgreSQL binary directory (default: autodetect)")
@@ -77,7 +80,7 @@ func upOptions() (db.UpOptions, error) {
 	if err != nil {
 		return db.UpOptions{}, err
 	}
-	return db.UpOptions{Size: size, Port: flagPort}, nil
+	return db.UpOptions{Size: size, Port: flagPort, Durable: flagDurable}, nil
 }
 
 func runShell(cmd *cobra.Command, args []string) error {

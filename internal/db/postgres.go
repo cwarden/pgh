@@ -122,7 +122,12 @@ func (d *DB) InitDB() error {
 
 // Start launches the server via pg_ctl. The server listens on a Unix socket
 // in SockDir, plus 127.0.0.1:port when port is nonzero.
-func (d *DB) Start(port int) error {
+//
+// Unless durable is set, the server runs with synchronous_commit=off:
+// commits don't wait for the WAL to reach disk, which avoids fsync
+// round-trips through FUSE (~9x more TPS on fuse2fs). A crash can lose the
+// last few hundred milliseconds of commits but cannot corrupt the database.
+func (d *DB) Start(port int, durable bool) error {
 	listen := "''"
 	pgPort := 5432
 	if port != 0 {
@@ -131,6 +136,9 @@ func (d *DB) Start(port int) error {
 	}
 	opts := fmt.Sprintf("-c listen_addresses=%s -c port=%d -c unix_socket_directories='%s'",
 		listen, pgPort, d.SockDir())
+	if !durable {
+		opts += " -c synchronous_commit=off"
+	}
 	cmd, err := d.pgCommand("pg_ctl",
 		"-D", d.DataDir(),
 		"-l", d.LogFile(),

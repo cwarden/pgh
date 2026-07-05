@@ -54,6 +54,10 @@ func TestLifecycle(t *testing.T) {
 	psql("create table t (n int)")
 	psql("insert into t values (42)")
 
+	if got := psql("show synchronous_commit"); got != "off" {
+		t.Errorf("synchronous_commit = %q by default, want off", got)
+	}
+
 	// A second Up should find the server already running.
 	if _, started, err := d.Up(UpOptions{}); err != nil || started {
 		t.Errorf("second Up: started=%v err=%v, want already-running", started, err)
@@ -70,7 +74,7 @@ func TestLifecycle(t *testing.T) {
 	}
 
 	// Data must survive a stop/start cycle.
-	info, started, err = d.Up(UpOptions{})
+	info, started, err = d.Up(UpOptions{Durable: true})
 	if err != nil {
 		t.Fatalf("second Up after Down: %v", err)
 	}
@@ -79,6 +83,9 @@ func TestLifecycle(t *testing.T) {
 	}
 	if got := psql("select n from t"); got != "42" {
 		t.Errorf("data did not survive remount: got %q, want 42", got)
+	}
+	if got := psql("show synchronous_commit"); got != "on" {
+		t.Errorf("synchronous_commit = %q with Durable, want on", got)
 	}
 	if err := d.Down(); err != nil {
 		t.Fatalf("final Down: %v", err)
