@@ -99,6 +99,45 @@ temp.pdb: running (pid 797492, kernel mount)
 Runtime state for database files that have since been deleted is cleaned up
 (and not reported) as part of `pgh status`.
 
+### Monitoring
+
+`pgh top` is a `pg_top`-style live monitor that watches **every running pgh
+database at once** — one combined view instead of one tool per file. Each
+database file is its own PostgreSQL cluster, so ordinary single-server
+monitors can only see one at a time; `pgh top` connects to all of them.
+
+```console
+$ pgh top
+```
+
+The top section is a per-database summary — PostgreSQL version, connection
+count, active backends, transactions/sec, and buffer cache hit ratio (the
+rates are computed from the change between refreshes). Below it is a combined
+list of client backends from every server's `pg_stat_activity`: which file
+(`SOURCE`), pid, database, user, state, wait event, how long the current
+query has been running, and the query text.
+
+Databases appear and disappear from the view as they start and stop; only
+databases with a running server are shown. Keys:
+
+| Key | Action |
+|-----|--------|
+| `q` / `esc` | quit |
+| `s` | cycle sort column (time, source, database, state, pid) |
+| `r` | reverse the sort |
+| `a` | toggle showing idle backends vs. active only |
+| `+` / `-` | increase / decrease the refresh interval |
+| `↑` / `↓` | scroll the backend list |
+
+`--interval` sets the starting refresh interval (default 2s). When stdout is
+not a terminal, `pgh top` prints a single plain-text snapshot and exits,
+which is handy for scripting:
+
+```console
+$ pgh top --interval 1s
+$ pgh top | grep active            # one-shot, no TUI
+```
+
 ### Resizing
 
 Kernel-mounted databases (the usual case on Linux) **grow automatically**: a
@@ -145,6 +184,7 @@ $ pgh stop temp.pdb && rm temp.pdb
 | `-s, --size` | shell, `start` | Size of the database file (default `1G` for new files; the file is sparse, so unused space costs nothing). Given explicitly for an existing stopped database, resizes it. |
 | `-p, --port` | shell, `start` | Also listen on `127.0.0.1:PORT` (default: Unix socket only). |
 | `--durable` | shell, `start` | Make commits wait for the WAL to reach disk (PostgreSQL's default behavior). |
+| `-i, --interval` | `top` | Refresh interval for the live monitor (default `2s`). |
 | `--bindir` | all | PostgreSQL binary directory (default: autodetect via `pg_config`, `PATH`, then `/usr/lib/postgresql/*/bin` and friends). `PGH_BINDIR` works too. |
 
 ## How it works
