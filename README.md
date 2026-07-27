@@ -94,7 +94,12 @@ $ pgh status                       # all databases pgh knows about
 $ pgh status temp.pdb              # one database
 temp.pdb: running (pid 797492, kernel mount)
   postgresql://cwarden@/postgres?host=%2Frun%2Fuser%2F1000%2Fpgh%2Ftemp-00e34412%2Fsock&port=5432
+  3 connections (1 active)
 ```
+
+A running server also reports its client connections: the total, and — when
+there is at least one — how many are active (that is, not simply idle). The
+connection `pgh status` itself opens to take the count is excluded.
 
 Runtime state for database files that have since been deleted is cleaned up
 (and not reported) as part of `pgh status`.

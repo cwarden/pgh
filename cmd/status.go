@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/cwarden/pgh/internal/db"
 	"github.com/spf13/cobra"
@@ -73,8 +76,35 @@ func printStatus(d *db.DB) error {
 		fmt.Printf("%s: open at %s (%s), server stopped\n", d.Image, d.MountDir(), d.MountBackend())
 		return nil
 	}
-	fmt.Printf("%s: running (pid %d, %s)\n  %s\n", d.Image, info.PID, d.MountBackend(), info.URL())
+	fmt.Printf("%s: running (pid %d, %s)\n  %s\n  %s\n",
+		d.Image, info.PID, d.MountBackend(), info.URL(), connectionSummary(info))
 	return nil
+}
+
+// connectionSummary describes the server's client connections, or why they
+// could not be counted.
+func connectionSummary(info *db.ConnInfo) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conns, err := info.Connections(ctx)
+	if err != nil {
+		return fmt.Sprintf("connections unavailable: %s", firstLine(err.Error()))
+	}
+	return formatConnections(conns)
+}
+
+func formatConnections(c db.Connections) string {
+	if c.Total == 0 {
+		return "0 connections"
+	}
+	return fmt.Sprintf("%d connection%s (%d active)", c.Total, plural(c.Total), c.Active)
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func init() {
