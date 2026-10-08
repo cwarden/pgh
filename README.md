@@ -110,6 +110,11 @@ password; for `*` its host is this machine's host name, which the other
 machines must be able to resolve. `pgh status` shows the same string with the
 password replaced.
 
+The bind address must be one of this machine's: a start that cannot listen
+on it stops the server and fails with the reason PostgreSQL gave (for
+example, `could not bind IPv4 address "192.168.1.111": Cannot assign requested
+address`), instead of leaving a server that listens on 127.0.0.1 alone.
+
 A server that is already running keeps the addresses it was started with:
 `pgh start --bind` with an address it does not listen on fails until the
 database is stopped.

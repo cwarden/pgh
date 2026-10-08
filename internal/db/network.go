@@ -172,3 +172,31 @@ func checkBind(info *ConnInfo, bind string) error {
 	}
 	return fmt.Errorf("the server is already running and listens on %s, not %s; stop it and start it again with --bind", listening, bind)
 }
+
+// bindErrors returns, as a suffix for an error message, the lines the
+// server's log has from its last start about addresses it could not listen
+// on, such as `could not bind IPv4 address "192.168.1.111": Cannot assign
+// requested address`.
+func bindErrors(logFile string) string {
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	start := 0
+	for i, line := range lines {
+		if strings.Contains(line, "starting PostgreSQL") {
+			start = i
+		}
+	}
+	var found []string
+	for _, line := range lines[start:] {
+		if strings.Contains(line, "could not bind") || strings.Contains(line, "could not create listen socket") {
+			found = append(found, strings.TrimSpace(line))
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	return ":\n" + strings.Join(found, "\n")
+}

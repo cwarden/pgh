@@ -84,6 +84,21 @@ func (d *DB) Up(opts UpOptions) (info *ConnInfo, started bool, err error) {
 			return nil, false, err
 		}
 		if opts.Bind != "" {
+			// PostgreSQL starts when it can listen on any one of its
+			// listen_addresses, and pgh adds 127.0.0.1 to the bind address,
+			// so a bind address it could not listen on leaves a server
+			// other machines cannot reach. postmaster.pid names the first
+			// address it listens on, which is the bind address when it
+			// could listen there.
+			if info.ListenAddr != opts.Bind {
+				failure := fmt.Errorf("the server could not listen on %s port %d, so it was stopped%s",
+					opts.Bind, opts.Port, bindErrors(d.LogFile()))
+				if err := d.Stop(); err != nil {
+					failure = fmt.Errorf("%w (stopping it: %v)", failure, err)
+				}
+				d.cleanupAfterFailure(mounted)
+				return nil, false, failure
+			}
 			if err := d.setPassword(info); err != nil {
 				return nil, false, err
 			}

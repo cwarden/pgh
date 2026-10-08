@@ -215,3 +215,42 @@ func freePort(t *testing.T) int {
 	defer lis.Close()
 	return lis.Addr().(*net.TCPAddr).Port
 }
+
+// A bind address the server cannot listen on fails the start, and the server
+// that started on 127.0.0.1 alone is stopped instead of left running where
+// other machines cannot reach it.
+func TestBindToAnAddressTheServerCannotListenOnFails(t *testing.T) {
+	skipWithoutLifecycleTools(t)
+	// A directory named after this test would make the server's socket
+	// path longer than the 107 bytes a Unix socket path may have.
+	base, err := os.MkdirTemp("", "pghbind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(base) })
+	t.Setenv("PGH_STATE_DIR", filepath.Join(base, "state"))
+	d, err := New(filepath.Join(base, "unbound.pdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Down() })
+
+	// 192.0.2.1 is reserved for documentation (RFC 5737), so no machine
+	// has it.
+	port := freePort(t)
+	_, _, err = d.Up(UpOptions{Size: 300 << 20, Port: port, Bind: "192.0.2.1"})
+	if err == nil {
+		t.Fatal("Up with a bind address the server cannot listen on succeeded")
+	}
+	if !strings.Contains(err.Error(), "could not listen on 192.0.2.1 port "+strconv.Itoa(port)) {
+		t.Errorf("error %q does not name the address", err)
+	}
+	if !strings.Contains(err.Error(), "could not bind") {
+		t.Errorf("error %q does not give the server's reason", err)
+	}
+	conn, dialErr := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(port))
+	if dialErr == nil {
+		conn.Close()
+		t.Error("the server is still listening on 127.0.0.1")
+	}
+}
