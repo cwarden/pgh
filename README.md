@@ -87,6 +87,33 @@ $ pgh start -p 5433 temp.pdb
 $ psql -h 127.0.0.1 -p 5433 -U $USER postgres
 ```
 
+### Connections from other machines
+
+Add `--bind` with an IP address, or `*` for every interface, to also listen
+there for connections from other machines (for example, the agents of an
+`aer server --cluster` coordinator, which all connect to the coordinator's
+database). `--bind` requires `--port`:
+
+```console
+$ DB_URL=$(pgh start --bind '*' -p 5433 temp.pdb)
+$ echo "$DB_URL"
+postgresql://alice:Xq3...@myhost:5433/postgres
+```
+
+The Unix socket and connections from 127.0.0.1 and ::1 keep needing no
+password. Connections from any other address must give the password of
+your database user (scram-sha-256), which pgh generates the first time the
+database is started with `--bind` and keeps in the database file, so it
+stays the same across restarts and copies of the file. With `--bind`,
+`pgh start` prints the connection string other machines use, with that
+password; for `*` its host is this machine's host name, which the other
+machines must be able to resolve. `pgh status` shows the same string with the
+password replaced.
+
+A server that is already running keeps the addresses it was started with:
+`pgh start --bind` with an address it does not listen on fails until the
+database is stopped.
+
 ### Status
 
 ```console
@@ -188,6 +215,7 @@ $ pgh stop temp.pdb && rm temp.pdb
 |------|----------|-------------|
 | `-s, --size` | shell, `start` | Size of the database file (default `1G` for new files; the file is sparse, so unused space costs nothing). Given explicitly for an existing stopped database, resizes it. |
 | `-p, --port` | shell, `start` | Also listen on `127.0.0.1:PORT` (default: Unix socket only). |
+| `--bind` | shell, `start` | Also listen on this IP address (`*` for every interface) at `--port`, for connections from other machines, which must give a generated password. |
 | `--durable` | shell, `start` | Make commits wait for the WAL to reach disk (PostgreSQL's default behavior). |
 | `-i, --interval` | `top` | Refresh interval for the live monitor (default `2s`). |
 | `--bindir` | all | PostgreSQL binary directory (default: autodetect via `pg_config`, `PATH`, then `/usr/lib/postgresql/*/bin` and friends). `PGH_BINDIR` works too. |
@@ -220,7 +248,11 @@ $ pgh stop temp.pdb && rm temp.pdb
    kernel mount on Linux and vice versa.
 3. `initdb` creates a data directory inside the image on first use
    (`trust` auth, superuser = your username — the socket directory is
-   only accessible to you).
+   only accessible to you). A server started with `--bind` uses a
+   `pg_hba.conf` that pgh writes to the runtime directory instead, which
+   keeps `trust` for the socket and loopback addresses and requires
+   `scram-sha-256` from every other address; the password is in
+   `pgh-password` inside the image.
 4. `pg_ctl` starts PostgreSQL with its Unix socket in the runtime directory
    (kept outside the image for socket-path-length reasons). The server log
    lives inside the image at `postgres.log`.

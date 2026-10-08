@@ -31,3 +31,14 @@ func TestFirstLine(t *testing.T) {
 		t.Errorf("firstLine = %q, want %q", got, "boom")
 	}
 }
+
+func TestRedactPassword(t *testing.T) {
+	got := redactPassword("postgresql://alice:s3cret@db.example.com:5433/postgres")
+	if want := "postgresql://alice:xxxxx@db.example.com:5433/postgres"; got != want {
+		t.Errorf("redactPassword = %q, want %q", got, want)
+	}
+	socket := "postgresql://alice@/postgres?host=%2Frun%2Fsock&port=5432"
+	if got := redactPassword(socket); got != socket {
+		t.Errorf("redactPassword changed a URL without a password: %q", got)
+	}
+}

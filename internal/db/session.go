@@ -16,6 +16,9 @@ type UpOptions struct {
 	// Durable makes commits wait for the WAL to reach disk (PostgreSQL's
 	// default). Off by default: see Start.
 	Durable bool
+	// Bind makes the server also listen on this address, for connections
+	// from other machines, which must give a password. It requires Port.
+	Bind string
 }
 
 // Up ensures the database is running: it creates the image if missing,
@@ -68,7 +71,7 @@ func (d *DB) Up(opts UpOptions) (info *ConnInfo, started bool, err error) {
 		return nil, false, err
 	}
 	if info == nil {
-		if err := d.Start(opts.Port, opts.Durable); err != nil {
+		if err := d.Start(opts.Port, opts.Durable, opts.Bind); err != nil {
 			d.cleanupAfterFailure(mounted)
 			return nil, false, err
 		}
@@ -80,6 +83,13 @@ func (d *DB) Up(opts UpOptions) (info *ConnInfo, started bool, err error) {
 		if err != nil {
 			return nil, false, err
 		}
+		if opts.Bind != "" {
+			if err := d.setPassword(info); err != nil {
+				return nil, false, err
+			}
+		}
+	} else if err := checkBind(info, opts.Bind); err != nil {
+		return nil, false, err
 	}
 	return info, started, nil
 }

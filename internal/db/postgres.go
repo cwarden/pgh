@@ -122,21 +122,40 @@ func (d *DB) InitDB() error {
 }
 
 // Start launches the server via pg_ctl. The server listens on a Unix socket
-// in SockDir, plus 127.0.0.1:port when port is nonzero.
+// in SockDir, plus 127.0.0.1:port when port is nonzero. A bind address, which
+// requires a port, makes it listen on that address too, with the client
+// authentication in HBAFile: connections from other machines must give the
+// password in PasswordFile, which the caller sets with setPassword once the
+// server runs.
 //
 // Unless durable is set, the server runs with synchronous_commit=off:
 // commits don't wait for the WAL to reach disk, which avoids fsync
 // round-trips through FUSE (~9x more TPS on fuse2fs). A crash can lose the
 // last few hundred milliseconds of commits but cannot corrupt the database.
-func (d *DB) Start(port int, durable bool) error {
+func (d *DB) Start(port int, durable bool, bind string) error {
 	listen := "''"
 	pgPort := 5432
 	if port != 0 {
 		listen = "127.0.0.1"
 		pgPort = port
 	}
+	if bind != "" {
+		if port == 0 {
+			return fmt.Errorf("--bind requires --port")
+		}
+		if err := ValidateBind(bind); err != nil {
+			return err
+		}
+		if err := d.writeHBAFile(); err != nil {
+			return err
+		}
+		listen = "'" + listenAddresses(bind) + "'"
+	}
 	opts := fmt.Sprintf("-c listen_addresses=%s -c port=%d -c unix_socket_directories='%s'",
 		listen, pgPort, d.SockDir())
+	if bind != "" {
+		opts += fmt.Sprintf(" -c hba_file='%s'", d.HBAFile())
+	}
 	if !durable {
 		opts += " -c synchronous_commit=off"
 	}

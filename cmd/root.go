@@ -15,6 +15,7 @@ import (
 var (
 	flagSize    string
 	flagPort    int
+	flagBind    string
 	flagBinDir  string
 	flagDurable bool
 )
@@ -59,6 +60,8 @@ func init() {
 			"size of the database file, e.g. 512M, 2G; resizes an existing stopped database")
 		cmd.Flags().IntVarP(&flagPort, "port", "p", 0,
 			"also listen on 127.0.0.1:PORT (default: Unix socket only)")
+		cmd.Flags().StringVar(&flagBind, "bind", "",
+			"also listen on this IP address (or * for every interface) at --port, for connections from other machines, which must give a generated password")
 		cmd.Flags().BoolVar(&flagDurable, "durable", false,
 			"make commits wait for the WAL to reach disk (slower on FUSE; default trades a sub-second data-loss window on crash for ~9x commit throughput)")
 	}
@@ -80,7 +83,15 @@ func upOptions() (db.UpOptions, error) {
 	if err != nil {
 		return db.UpOptions{}, err
 	}
-	return db.UpOptions{Size: size, Port: flagPort, Durable: flagDurable}, nil
+	if flagBind != "" {
+		if flagPort == 0 {
+			return db.UpOptions{}, fmt.Errorf("--bind requires --port")
+		}
+		if err := db.ValidateBind(flagBind); err != nil {
+			return db.UpOptions{}, err
+		}
+	}
+	return db.UpOptions{Size: size, Port: flagPort, Durable: flagDurable, Bind: flagBind}, nil
 }
 
 // resizeIfRequested resizes an existing image when --size was given

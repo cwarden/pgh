@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -76,9 +77,30 @@ func printStatus(d *db.DB) error {
 		fmt.Printf("%s: open at %s (%s), server stopped\n", d.Image, d.MountDir(), d.MountBackend())
 		return nil
 	}
-	fmt.Printf("%s: running (pid %d, %s)\n  %s\n  %s\n",
-		d.Image, info.PID, d.MountBackend(), info.URL(), connectionSummary(info))
+	fmt.Printf("%s: running (pid %d, %s)\n  %s\n", d.Image, info.PID, d.MountBackend(), info.URL())
+	networkURL, ok, err := d.NetworkURL(info)
+	if err != nil {
+		return err
+	}
+	if ok {
+		fmt.Printf("  %s (password: pgh start prints it)\n", redactPassword(networkURL))
+	}
+	fmt.Printf("  %s\n", connectionSummary(info))
 	return nil
+}
+
+// redactPassword replaces the password in a connection string, so status
+// output can be shown without giving the password away.
+func redactPassword(connString string) string {
+	u, err := url.Parse(connString)
+	if err != nil || u.User == nil {
+		return connString
+	}
+	if _, set := u.User.Password(); !set {
+		return connString
+	}
+	u.User = url.UserPassword(u.User.Username(), "xxxxx")
+	return u.String()
 }
 
 // connectionSummary describes the server's client connections, or why they

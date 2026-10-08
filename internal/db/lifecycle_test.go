@@ -11,20 +11,7 @@ import (
 // query over the Unix socket, stop, unmount, then remount and verify the
 // data survived.
 func TestLifecycle(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in -short mode")
-	}
-	for _, tool := range []string{"fuse2fs"} {
-		if _, err := findTool(tool); err != nil {
-			t.Skipf("%s not available", tool)
-		}
-	}
-	if _, err := findTool("mkfs.ext4"); err != nil {
-		t.Skip("mkfs.ext4 not available")
-	}
-	if _, err := FindBinDir(); err != nil {
-		t.Skip("PostgreSQL server binaries not available")
-	}
+	skipWithoutLifecycleTools(t)
 
 	base := t.TempDir()
 	t.Setenv("PGH_STATE_DIR", filepath.Join(base, "state"))
@@ -89,5 +76,25 @@ func TestLifecycle(t *testing.T) {
 	}
 	if err := d.Down(); err != nil {
 		t.Fatalf("final Down: %v", err)
+	}
+}
+
+// skipWithoutLifecycleTools skips an integration test in -short mode or when
+// the tools to create, mount, and run a database are missing.
+func skipWithoutLifecycleTools(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping integration test in -short mode")
+	}
+	for _, tool := range []string{"fuse2fs"} {
+		if _, err := findTool(tool); err != nil {
+			t.Skipf("%s not available", tool)
+		}
+	}
+	if _, err := findTool("mkfs.ext4"); err != nil {
+		t.Skip("mkfs.ext4 not available")
+	}
+	if _, err := FindBinDir(); err != nil {
+		t.Skip("PostgreSQL server binaries not available")
 	}
 }
